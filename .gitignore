@@ -1,0 +1,33 @@
+# ── Compiled output ───────────────────────────────────────────────────────────
+target/
+*.class
+*.jar
+*.war
+
+# ── Maven wrapper ─────────────────────────────────────────────────────────────
+.mvn/wrapper/maven-wrapper.jar
+!.mvn/wrapper/maven-wrapper.properties
+
+# ── IDE files ─────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+*.code-workspace
+.vscode/
+
+# ── OS artifacts ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+logs/
+*.log
+spring.log
+
+# ── NEVER COMMIT — IBM credentials must stay local ────────────────────────────
+# Use environment variables or IBM Secrets Manager in production.
+# If you customise application.properties with real keys,
+# add the modified file to this ignore list:
+# application-prod.properties
