@@ -169,36 +169,36 @@ public class ClimateAlertController {
         log.info("EcoDispatch Scheduler — Heat Anomaly Scan Cycle STARTED");
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-        // ── Mock incoming weather sensor readings (simulates fresh file ingestion)
-        // Format: { districtName, zoneName, temperature°C, canopy% }
-        double[][] mockReadings = {
-            // [ temperature, canopy ]  — ordered to match seeded zones by name
-            { 41.2,  7.8 },   // Chennai     / Saidapet       — CRITICAL
-            { 36.5, 14.5 },   // Chennai     / Anna Nagar     — NORMAL
-            { 42.5,  6.1 },   // Chennai     / Velachery      — CRITICAL
-            { 43.0,  4.8 },   // Coimbatore  / Ukkadam        — CRITICAL
-            { 37.2, 11.3 },   // Coimbatore  / Gandhipuram    — ELEVATED
-            { 44.1,  3.9 },   // Madurai     / Tallakulam     — CRITICAL
-            { 35.8, 19.2 },   // Madurai     / Anaiyur        — NORMAL
-            { 40.1,  9.0 },   // Salem       / Shevapet       — CRITICAL
-            { 38.9, 12.0 },   // Trichy      / Srirangam      — ELEVATED
-            { 41.6,  7.2 },   // Tirunelveli / Palayamkottai  — CRITICAL
-        };
+        // ── Mock sensor readings keyed by zoneName so order is deterministic.
+        // BUG 5 FIX: the old approach relied on findAll() returning rows in
+        // insertion order, which JPA/H2 does NOT guarantee.  Using a Map keyed
+        // by zoneName eliminates the position-coupling entirely.
+        java.util.Map<String, double[]> readings = new java.util.LinkedHashMap<>();
+        readings.put("Saidapet",      new double[]{ 41.2,  7.8 });  // CRITICAL
+        readings.put("Anna Nagar",    new double[]{ 36.5, 14.5 });  // NORMAL
+        readings.put("Velachery",     new double[]{ 42.5,  6.1 });  // CRITICAL
+        readings.put("Ukkadam",       new double[]{ 43.0,  4.8 });  // CRITICAL
+        readings.put("Gandhipuram",   new double[]{ 37.2, 11.3 });  // ELEVATED
+        readings.put("Tallakulam",    new double[]{ 44.1,  3.9 });  // CRITICAL
+        readings.put("Anaiyur",       new double[]{ 35.8, 19.2 });  // NORMAL
+        readings.put("Shevapet",      new double[]{ 40.1,  9.0 });  // CRITICAL
+        readings.put("Srirangam",     new double[]{ 38.9, 12.0 });  // ELEVATED
+        readings.put("Palayamkottai", new double[]{ 41.6,  7.2 });  // CRITICAL
 
         List<DistrictAlert> allZones = alertRepository.findAll();
 
-        if (allZones.size() != mockReadings.length) {
-            log.warn("Zone count mismatch — seeded zones: {} | mock readings: {}",
-                     allZones.size(), mockReadings.length);
-        }
-
         int criticalCount = 0;
         int elevatedCount = 0;
+        int normalCount   = 0;
 
-        for (int i = 0; i < Math.min(allZones.size(), mockReadings.length); i++) {
-            DistrictAlert zone  = allZones.get(i);
-            double temp         = mockReadings[i][0];
-            double canopy       = mockReadings[i][1];
+        for (DistrictAlert zone : allZones) {
+            double[] reading = readings.get(zone.getZoneName());
+            if (reading == null) {
+                log.warn("No mock reading found for zone '{}' — skipping.", zone.getZoneName());
+                continue;
+            }
+            double temp   = reading[0];
+            double canopy = reading[1];
 
             // ── Update entity with latest readings ────────────────────────────
             zone.setTemperature(temp);
@@ -207,34 +207,39 @@ public class ClimateAlertController {
             // ── Invoke IBM Granite agent ──────────────────────────────────────
             String aiPlan = watsonxService.evaluateZoneMetrics(
                 zone.getDistrictName(), zone.getZoneName(), temp, canopy);
-
             zone.setAiActionPlan(aiPlan);
 
             // ── Classify status from temperature threshold ────────────────────
+            // BUG 3 FIX: elevated zones now get their own distinct status value
+            // "ELEVATED_ALERT" instead of sharing "ALERT_PENDING_WATERING" with
+            // critical zones, so the dashboard and counters can distinguish them.
+            // BUG 4 FIX: normalCount is now tracked as its own counter instead
+            // of being derived by subtracting criticalCount + elevatedCount from
+            // total (the old formula double-subtracted elevated zones).
             String newStatus;
             if (temp > 40.0) {
                 newStatus = "ALERT_PENDING_WATERING";
                 criticalCount++;
             } else if (temp > 37.0) {
-                newStatus = "ALERT_PENDING_WATERING";
+                newStatus = "ELEVATED_ALERT";
                 elevatedCount++;
             } else {
                 newStatus = "NORMAL";
+                normalCount++;
             }
             zone.setStatus(newStatus);
             alertRepository.save(zone);
 
             // ── Terminal dispatch log ─────────────────────────────────────────
-            log.info("▶ [{}/{}] {}°C | Canopy {}% | Status: {} ",
+            log.info("▶ [{}/{}] {}°C | Canopy {}% | Status: {}",
                      zone.getDistrictName(), zone.getZoneName(),
                      temp, canopy, newStatus);
             log.info("  ✦ Granite Dispatch: {}", aiPlan);
         }
 
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        log.info("Scan complete — CRITICAL zones: {} | ELEVATED zones: {} | NORMAL: {}",
-                 criticalCount, elevatedCount,
-                 allZones.size() - criticalCount - elevatedCount);
+        log.info("Scan complete — CRITICAL: {} | ELEVATED: {} | NORMAL: {}",
+                 criticalCount, elevatedCount, normalCount);
         log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     }
 }

@@ -21,9 +21,10 @@ import java.util.*;
  * as a CRITICAL_ANOMALY and return an actionable plain-language text instruction
  * for city watering and planting ground crews."</p>
  *
- * <p>When {@code ibm.watsonx.api-key} is set to its placeholder value,
- * the service falls back to a deterministic local mock response so the
- * application runs fully offline during development.</p>
+ * <p><strong>Credential detection:</strong> If {@code ibm.watsonx.api-key} is
+ * empty, blank, or begins with {@code "YOUR_"}, no network call is attempted and
+ * the service immediately returns a deterministic local mock response.
+ * The application therefore runs fully on localhost out-of-the-box.</p>
  */
 @Slf4j
 @Service
@@ -61,20 +62,34 @@ public class WatsonxAiAgentService {
 
     private final RestTemplate restTemplate = new RestTemplate();
 
-    // ── Placeholder sentinel — detects unconfigured credentials ──────────────
-    private static final String PLACEHOLDER_KEY = "YOUR_IBM_CLOUD_API_KEY_HERE";
-
     // ─────────────────────────────────────────────────────────────────────────
     //  Public API
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
+     * Returns {@code true} when the configured API key is absent or still holds
+     * a placeholder value — any of:
+     * <ul>
+     *   <li>null / empty / blank</li>
+     *   <li>starts with {@code "YOUR_"} (covers all placeholder variants)</li>
+     * </ul>
+     * No network call is ever attempted when this method returns {@code true}.
+     */
+    private boolean isCredentialsMissing() {
+        return apiKey == null
+            || apiKey.isBlank()
+            || apiKey.toUpperCase().startsWith("YOUR_");
+    }
+
+    /**
      * Evaluates a district's climate metrics using the IBM Granite model agent.
      *
-     * <p>Constructs a structured prompt combining the system role with live
-     * metric values, then calls the watsonx.ai generation endpoint.
-     * If credentials are not yet configured, delegates to
-     * {@link #buildMockResponse(String, String, double, double)}.</p>
+     * <p>If {@link #isCredentialsMissing()} is {@code true} the method short-circuits
+     * immediately to {@link #buildMockResponse} — no TCP connection is opened, so
+     * the application runs on localhost without any hang or timeout.</p>
+     *
+     * <p>When real credentials are present the method calls the live watsonx.ai
+     * endpoint and falls back to the mock only on a network or API error.</p>
      *
      * @param districtName     parent district (e.g., "Chennai")
      * @param zoneName         sub-zone locality (e.g., "Saidapet")
@@ -90,13 +105,14 @@ public class WatsonxAiAgentService {
         log.debug("Granite Agent — evaluating zone: {}/{} | temp={}°C canopy={}%",
                   districtName, zoneName, temperature, canopyPercentage);
 
-        // ── Development fallback: run offline when credentials are placeholder ─
-        if (PLACEHOLDER_KEY.equals(apiKey)) {
-            log.warn("watsonx.ai credentials not configured — using mock response for {}/{}",
+        // ── Short-circuit: skip all network I/O when credentials are absent ───
+        if (isCredentialsMissing()) {
+            log.info("[LOCAL MODE] No valid watsonx.ai credentials — returning mock Granite response for {}/{}",
                      districtName, zoneName);
             return buildMockResponse(districtName, zoneName, temperature, canopyPercentage);
         }
 
+        // ── Live path: call IBM Granite via watsonx.ai REST endpoint ──────────
         try {
             String bearerToken = fetchIamBearerToken();
             String prompt      = buildPrompt(districtName, zoneName, temperature, canopyPercentage);
@@ -215,22 +231,22 @@ public class WatsonxAiAgentService {
                                      double canopyPercentage) {
         if (temperature > 40.0) {
             return String.format(
-                "[CRITICAL_ANOMALY — %s / %s] Temperature %.1f°C exceeds critical threshold. " +
+                "[CRITICAL_ANOMALY - %s / %s] Temperature %.1f C exceeds critical threshold. " +
                 "Deploy watering tanker immediately to alleviate local soil moisture crisis. " +
                 "Coordinate with Parks Division to initiate emergency native-species planting " +
-                "within 0.5 km radius. Canopy cover at %.1f%% — priority reforestation required. " +
+                "within 0.5 km radius. Canopy cover at %.1f%% - priority reforestation required. " +
                 "Dispatch green crew to site within 2 hours.",
                 districtName, zoneName, temperature, canopyPercentage);
         } else if (temperature > 37.0) {
             return String.format(
-                "[ELEVATED_ALERT — %s / %s] Temperature %.1f°C deviates from 35°C baseline. " +
+                "[ELEVATED_ALERT - %s / %s] Temperature %.1f C deviates from 35 C baseline. " +
                 "Schedule supplemental irrigation within 24 hours. " +
                 "Flag zone for canopy audit (current coverage: %.1f%%). " +
                 "Recommend medium-density shrub planting along road corridors.",
                 districtName, zoneName, temperature, canopyPercentage);
         } else {
             return String.format(
-                "[NORMAL — %s / %s] Temperature %.1f°C within acceptable baseline range. " +
+                "[NORMAL - %s / %s] Temperature %.1f C within acceptable baseline range. " +
                 "Routine canopy maintenance schedule applies. No emergency dispatch required.",
                 districtName, zoneName, temperature, canopyPercentage);
         }
